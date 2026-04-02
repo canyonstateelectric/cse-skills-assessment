@@ -339,67 +339,157 @@ function sanitizeQuestion(q: Question, language: string = "en") {
   };
 }
 
-// Build email body text
+// Build branded HTML email body
 function buildEmailBody(result: EmailResult): string {
-  const domainBreakdown = Object.entries(result.domainScores)
-    .map(([domain, scores]) => {
-      const pct = Math.round((scores.correct / scores.total) * 100);
-      const domainName = domain.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-      return `  ${domainName}: ${scores.correct}/${scores.total} (${pct}%)`;
-    })
-    .join("\n");
+  const overallPct = Math.round((result.correctAnswers / result.totalQuestions) * 100);
+  const languageLabel = result.language === "es" ? "Spanish" : "English";
+  const dateStr = new Date().toLocaleDateString("en-US", { timeZone: "America/Phoenix", year: "numeric", month: "long", day: "numeric" });
+  const timeStr = new Date().toLocaleTimeString("en-US", { timeZone: "America/Phoenix", hour: "numeric", minute: "2-digit" });
+  const levelLabel = result.diagnosedLevel.replace(/wireman(\d)/i, "Wireman $1").replace(/journeyman/i, "Journeyman").replace(/leadman/i, "Leadman").replace(/foreman/i, "Foreman").replace(/superintendent/i, "Superintendent");
 
-  // Build question-by-question detail
-  const questionLines = result.questionDetails.map((qd) => {
-    const status = qd.isCorrect ? "✓ CORRECT" : "✗ INCORRECT";
-    const levelLabel = qd.level.replace(/wireman/i, "Wireman ").replace(/journeyman/i, "Journeyman").replace(/leadman/i, "Leadman").replace(/foreman/i, "Foreman").replace(/superintendent/i, "Superintendent");
+  // Domain rows
+  const domainRows = Object.entries(result.domainScores).map(([domain, scores]) => {
+    const pct = Math.round((scores.correct / scores.total) * 100);
+    const domainName = domain.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    const barColor = pct >= 70 ? "#00944F" : pct >= 40 ? "#FFCA3A" : "#D94040";
+    return `<tr>
+      <td style="padding:8px 12px;color:#c8d6e5;font-size:14px;border-bottom:1px solid #1e3a5f;">${domainName}</td>
+      <td style="padding:8px 12px;color:#fff;font-size:14px;border-bottom:1px solid #1e3a5f;text-align:center;">${scores.correct}/${scores.total}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #1e3a5f;width:120px;">
+        <div style="background:#0d2137;border-radius:4px;height:8px;width:100%;">
+          <div style="background:${barColor};border-radius:4px;height:8px;width:${pct}%;"></div>
+        </div>
+      </td>
+      <td style="padding:8px 12px;color:#fff;font-size:14px;border-bottom:1px solid #1e3a5f;text-align:right;font-weight:600;">${pct}%</td>
+    </tr>`;
+  }).join("");
+
+  // Question detail rows
+  const questionRows = result.questionDetails.map((qd) => {
+    const qLevelLabel = qd.level.replace(/wireman(\d)/i, "Wireman $1").replace(/journeyman/i, "Journeyman").replace(/leadman/i, "Leadman").replace(/foreman/i, "Foreman").replace(/superintendent/i, "Superintendent");
     const domainLabel = qd.domain.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-    let line = `  Q${qd.number}. [${levelLabel}] [${domainLabel}] ${status}\n`;
-    line += `      Question: ${qd.question}\n`;
-    line += `      Candidate's Answer: ${qd.candidateAnswer}\n`;
-    if (!qd.isCorrect) {
-      line += `      Correct Answer: ${qd.correctAnswer}\n`;
-    }
-    return line;
-  }).join("\n");
+    const statusColor = qd.isCorrect ? "#00944F" : "#D94040";
+    const statusIcon = qd.isCorrect ? "&#10003;" : "&#10007;";
+    const statusText = qd.isCorrect ? "Correct" : "Incorrect";
+    const incorrectRow = !qd.isCorrect ? `<div style="color:#6adb90;font-size:12px;margin-top:4px;">Correct answer: ${qd.correctAnswer}</div>` : "";
+    return `<tr>
+      <td style="padding:12px;border-bottom:1px solid #1e3a5f;vertical-align:top;width:110px;">
+        <div style="color:${statusColor};font-size:12px;font-weight:700;">${statusIcon} ${statusText}</div>
+        <div style="color:#8faabe;font-size:11px;margin-top:6px;">${qLevelLabel}</div>
+        <div style="color:#6a8ea5;font-size:10px;">${domainLabel}</div>
+      </td>
+      <td style="padding:12px;border-bottom:1px solid #1e3a5f;vertical-align:top;">
+        <div style="color:#e8edf2;font-size:14px;line-height:1.4;">${qd.question}</div>
+        <div style="color:#9db8cc;font-size:13px;margin-top:6px;">Answer: <span style="color:${qd.isCorrect ? '#6adb90' : '#f07070'};font-weight:600;">${qd.candidateAnswer}</span></div>
+        ${incorrectRow}
+      </td>
+    </tr>`;
+  }).join("");
 
-  return `
-CANYON STATE ELECTRIC — ELECTRICIAN SKILLS ASSESSMENT RESULTS
-═══════════════════════════════════════════════════════════════
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#0a1929;font-family:'Segoe UI',Roboto,Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#0a1929;padding:24px 0;">
+<tr><td align="center">
+<table width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;">
 
-Candidate: ${result.firstName} ${result.lastName}
-Date: ${new Date().toLocaleDateString("en-US", { timeZone: "America/Phoenix" })}
-Time: ${new Date().toLocaleTimeString("en-US", { timeZone: "America/Phoenix" })}
-Language: ${result.language === "es" ? "Spanish" : "English"}
-Time Elapsed: ${result.timeElapsed}
+  <!-- Header -->
+  <tr><td style="background:#0d2a4a;border-radius:12px 12px 0 0;padding:32px 40px;text-align:center;border-bottom:3px solid #136BAC;">
+    <div style="width:56px;height:56px;background:#fff;border-radius:50%;margin:0 auto 16px;line-height:56px;text-align:center;">
+      <span style="color:#0d2a4a;font-weight:800;font-size:20px;">CSE</span>
+    </div>
+    <div style="font-size:20px;font-weight:800;color:#fff;letter-spacing:3px;text-transform:uppercase;">Canyon State Electric</div>
+    <div style="font-size:12px;font-weight:600;color:#FFCA3A;letter-spacing:2px;text-transform:uppercase;margin-top:6px;">Skills Assessment Report</div>
+  </td></tr>
 
-═══════════════════════════════════════════════════════════════
-DIAGNOSED LEVEL: ${result.diagnosedLevel.toUpperCase()}
-Confidence: ${result.levelConfidence}%
-═══════════════════════════════════════════════════════════════
+  <!-- Candidate Info -->
+  <tr><td style="background:#0f2d4f;padding:24px 40px;">
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td style="color:#8faabe;font-size:12px;text-transform:uppercase;letter-spacing:1px;padding-bottom:4px;">Candidate</td>
+        <td style="color:#8faabe;font-size:12px;text-transform:uppercase;letter-spacing:1px;padding-bottom:4px;text-align:right;">Date</td>
+      </tr>
+      <tr>
+        <td style="color:#fff;font-size:18px;font-weight:700;padding-bottom:12px;">${result.firstName} ${result.lastName}</td>
+        <td style="color:#c8d6e5;font-size:14px;padding-bottom:12px;text-align:right;">${dateStr} &middot; ${timeStr}</td>
+      </tr>
+      <tr>
+        <td style="color:#8faabe;font-size:12px;text-transform:uppercase;letter-spacing:1px;padding-bottom:4px;">Language</td>
+        <td style="color:#8faabe;font-size:12px;text-transform:uppercase;letter-spacing:1px;padding-bottom:4px;text-align:right;">Time Elapsed</td>
+      </tr>
+      <tr>
+        <td style="color:#c8d6e5;font-size:14px;">${languageLabel}</td>
+        <td style="color:#c8d6e5;font-size:14px;text-align:right;">${result.timeElapsed}</td>
+      </tr>
+    </table>
+  </td></tr>
 
-SUMMARY
-  Questions Answered: ${result.totalQuestions}
-  Correct Answers: ${result.correctAnswers}
-  Overall Score: ${Math.round((result.correctAnswers / result.totalQuestions) * 100)}%
-  Ability Estimate (θ): ${result.theta.toFixed(2)}
-  Standard Error: ${result.se.toFixed(2)}
+  <!-- Diagnosed Level Banner -->
+  <tr><td style="background:#136BAC;padding:20px 40px;text-align:center;">
+    <div style="color:rgba(255,255,255,0.7);font-size:11px;text-transform:uppercase;letter-spacing:2px;margin-bottom:4px;">Diagnosed Level</div>
+    <div style="color:#fff;font-size:28px;font-weight:800;text-transform:uppercase;letter-spacing:1px;">${levelLabel}</div>
+    <div style="color:rgba(255,255,255,0.8);font-size:13px;margin-top:4px;">Confidence: ${result.levelConfidence}%</div>
+  </td></tr>
 
-DOMAIN BREAKDOWN
-${domainBreakdown}
+  <!-- Summary Stats -->
+  <tr><td style="background:#0f2d4f;padding:24px 40px;">
+    <div style="color:#FFCA3A;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;margin-bottom:16px;">Summary</div>
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td align="center" style="padding:8px;">
+          <div style="color:#fff;font-size:28px;font-weight:800;">${result.totalQuestions}</div>
+          <div style="color:#8faabe;font-size:11px;text-transform:uppercase;letter-spacing:1px;">Questions</div>
+        </td>
+        <td align="center" style="padding:8px;">
+          <div style="color:#fff;font-size:28px;font-weight:800;">${result.correctAnswers}</div>
+          <div style="color:#8faabe;font-size:11px;text-transform:uppercase;letter-spacing:1px;">Correct</div>
+        </td>
+        <td align="center" style="padding:8px;">
+          <div style="color:#00944F;font-size:28px;font-weight:800;">${overallPct}%</div>
+          <div style="color:#8faabe;font-size:11px;text-transform:uppercase;letter-spacing:1px;">Score</div>
+        </td>
+        <td align="center" style="padding:8px;">
+          <div style="color:#fff;font-size:28px;font-weight:800;">${result.theta.toFixed(1)}</div>
+          <div style="color:#8faabe;font-size:11px;text-transform:uppercase;letter-spacing:1px;">Ability (&theta;)</div>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
 
-═══════════════════════════════════════════════════════════════
-QUESTION-BY-QUESTION DETAIL
-═══════════════════════════════════════════════════════════════
+  <!-- Domain Breakdown -->
+  <tr><td style="background:#0d2a4a;padding:24px 40px;">
+    <div style="color:#FFCA3A;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;margin-bottom:16px;">Domain Breakdown</div>
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td style="padding:6px 12px;color:#8faabe;font-size:11px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #1e3a5f;">Domain</td>
+        <td style="padding:6px 12px;color:#8faabe;font-size:11px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #1e3a5f;text-align:center;">Score</td>
+        <td style="padding:6px 12px;color:#8faabe;font-size:11px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #1e3a5f;">Progress</td>
+        <td style="padding:6px 12px;color:#8faabe;font-size:11px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #1e3a5f;text-align:right;">%</td>
+      </tr>
+      ${domainRows}
+    </table>
+  </td></tr>
 
-${questionLines}
+  <!-- Question Detail -->
+  <tr><td style="background:#0f2d4f;padding:24px 40px;">
+    <div style="color:#FFCA3A;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;margin-bottom:16px;">Question-by-Question Detail</div>
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${questionRows}
+    </table>
+  </td></tr>
 
-═══════════════════════════════════════════════════════════════
-This assessment was administered via the Canyon State Electric
-Adaptive Skills Assessment System.
-═══════════════════════════════════════════════════════════════
-  `.trim();
+  <!-- Footer -->
+  <tr><td style="background:#0d2a4a;border-radius:0 0 12px 12px;padding:20px 40px;text-align:center;border-top:1px solid #1e3a5f;">
+    <div style="color:#5a7a8f;font-size:12px;">Canyon State Electric &mdash; Employee Owned</div>
+    <div style="color:#3d5a6f;font-size:11px;margin-top:4px;">Adaptive Skills Assessment System</div>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body></html>`;
 }
+
 
 interface QuestionDetail {
   number: number;
@@ -444,7 +534,7 @@ async function sendViaBrevoAPI(result: EmailResult, emailBody: string): Promise<
       sender: { name: "Canyon State Electric Assessment", email: "info@cseci.com" },
       to: [{ email: "careers@cseci.com", name: "CSE Careers" }],
       subject,
-      textContent: emailBody,
+      htmlContent: emailBody,
     }),
   });
 
@@ -478,7 +568,7 @@ async function sendViaSMTP(result: EmailResult, emailBody: string): Promise<bool
     from: `"Canyon State Electric Assessment" <info@cseci.com>`,
     to: "careers@cseci.com",
     subject: `Skills Assessment: ${result.firstName} ${result.lastName} \u2014 ${result.diagnosedLevel}`,
-    text: emailBody,
+    html: emailBody,
   });
 
   console.log(`[SMTP:465] Email sent for session ${result.sessionId}`);
