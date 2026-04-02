@@ -197,6 +197,13 @@ export function registerRoutes(server: Server, app: Express) {
           };
         }).filter(Boolean) as QuestionDetail[];
 
+        // Compute time elapsed
+        const startTime = session.startedAt ? new Date(session.startedAt).getTime() : Date.now();
+        const elapsedMs = Date.now() - startTime;
+        const elapsedMin = Math.floor(elapsedMs / 60000);
+        const elapsedSec = Math.floor((elapsedMs % 60000) / 1000);
+        const timeElapsed = elapsedMin > 0 ? `${elapsedMin} min ${elapsedSec} sec` : `${elapsedSec} sec`;
+
         // Fire-and-forget email — send HTTP response immediately, email sends in background
         sendResultsEmail({
           sessionId,
@@ -210,6 +217,8 @@ export function registerRoutes(server: Server, app: Express) {
           domainScores,
           levelConfidence: confidence,
           questionDetails,
+          language: session.language || "en",
+          timeElapsed,
         }).then(async (emailSent) => {
           if (emailSent) {
             try {
@@ -361,6 +370,8 @@ CANYON STATE ELECTRIC — ELECTRICIAN SKILLS ASSESSMENT RESULTS
 Candidate: ${result.firstName} ${result.lastName}
 Date: ${new Date().toLocaleDateString("en-US", { timeZone: "America/Phoenix" })}
 Time: ${new Date().toLocaleTimeString("en-US", { timeZone: "America/Phoenix" })}
+Language: ${result.language === "es" ? "Spanish" : "English"}
+Time Elapsed: ${result.timeElapsed}
 
 ═══════════════════════════════════════════════════════════════
 DIAGNOSED LEVEL: ${result.diagnosedLevel.toUpperCase()}
@@ -412,6 +423,8 @@ interface EmailResult {
   domainScores: Record<string, { correct: number; total: number }>;
   levelConfidence: number;
   questionDetails: QuestionDetail[];
+  language: string;
+  timeElapsed: string;
 }
 
 // Primary: Brevo HTTP API (works on all cloud platforms including Railway)
