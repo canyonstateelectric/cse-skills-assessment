@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { TEST_VERSION } from "@shared/constants";
 import { useParams, useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -180,6 +181,9 @@ export default function ResultsPage() {
 
         <p className="text-[#4a6a8a] text-xs mt-8 text-center" style={{ fontFamily: 'Montserrat, sans-serif' }}>
           {t.footer}
+        </p>
+        <p className="text-[#3a5a7a] text-[10px] mt-1 text-center" style={{ fontFamily: 'Montserrat, sans-serif' }}>
+          Test Version {TEST_VERSION}
         </p>
       </div>
     </div>

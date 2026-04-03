@@ -8,6 +8,7 @@ export const testSessions = pgTable("test_sessions", {
   firstName: text("first_name").notNull(),
   lastName: text("last_name").notNull(),
   language: text("language").default("en"),
+  testVersion: text("test_version").default("1.0"),
   startedAt: timestamp("started_at").defaultNow(),
   completedAt: timestamp("completed_at"),
   currentTheta: real("current_theta").default(0),

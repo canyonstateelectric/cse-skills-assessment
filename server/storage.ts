@@ -38,6 +38,7 @@ export class MemStorage implements IStorage {
       firstName: session.firstName,
       lastName: session.lastName,
       language: session.language || "en",
+      testVersion: "1.0",
       startedAt: new Date(),
       completedAt: null,
       currentTheta: 0,

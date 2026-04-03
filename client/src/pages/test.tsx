@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { TEST_VERSION } from "@shared/constants";
 import { useParams, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -378,6 +379,9 @@ export default function TestPage() {
         <div className="max-w-3xl mx-auto flex items-center justify-between">
           <span className="text-xs text-[#4a6a8a]" style={{ fontFamily: 'Montserrat, sans-serif' }}>
             {t.monitored}
+          </span>
+          <span className="text-xs text-[#4a6a8a]" style={{ fontFamily: 'Montserrat, sans-serif' }}>
+            v{TEST_VERSION}
           </span>
           <span className="text-xs text-[#4a6a8a]" style={{ fontFamily: 'Montserrat, sans-serif' }}>
             {t.footer}

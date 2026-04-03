@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { TEST_VERSION } from "@shared/constants";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -200,6 +201,9 @@ export default function LoginPage() {
 
       <p className="text-[#4a6a8a] text-xs mt-6" style={{ fontFamily: 'Montserrat, sans-serif' }}>
         {t.footer}
+      </p>
+      <p className="text-[#3a5a7a] text-[10px] mt-1" style={{ fontFamily: 'Montserrat, sans-serif' }}>
+        Test Version {TEST_VERSION}
       </p>
     </div>
   );

@@ -3,6 +3,7 @@ import type { Server } from "http";
 import { storage } from "./storage";
 import { insertTestSessionSchema } from "../shared/schema";
 import type { CATState, Question } from "../shared/schema";
+import { generatePDFReport, updateMasterSheet } from "./report-generator";
 import {
   updateTheta,
   selectNextQuestion,
@@ -11,6 +12,8 @@ import {
   getLevelConfidence,
   getDomainScores,
 } from "./cat-engine";
+
+const TEST_VERSION = "1.0";
 
 export function registerRoutes(server: Server, app: Express) {
   // Start a new test session
@@ -219,6 +222,7 @@ export function registerRoutes(server: Server, app: Express) {
           questionDetails,
           language: session.language || "en",
           timeElapsed,
+          testVersion: TEST_VERSION,
         }).then(async (emailSent) => {
           if (emailSent) {
             try {
@@ -230,6 +234,26 @@ export function registerRoutes(server: Server, app: Express) {
         }).catch((e) => {
           console.error("Background email error:", e);
         });
+
+        // Fire-and-forget: generate PDF report and update master Excel sheet
+        const reportData = {
+          sessionId,
+          firstName: session.firstName,
+          lastName: session.lastName,
+          diagnosedLevel,
+          theta,
+          se,
+          totalQuestions: totalCount,
+          correctAnswers: correctCount,
+          domainScores,
+          levelConfidence: confidence,
+          questionDetails,
+          language: session.language || "en",
+          timeElapsed,
+          testVersion: TEST_VERSION,
+        };
+        generatePDFReport(reportData).catch((e) => console.error("PDF generation error:", e));
+        updateMasterSheet(reportData).catch((e) => console.error("Master sheet update error:", e));
 
         return res.json({
           nextQuestion: null,
@@ -400,6 +424,7 @@ function buildEmailBody(result: EmailResult): string {
     </div>
     <div style="font-size:20px;font-weight:800;color:#fff;letter-spacing:3px;text-transform:uppercase;">Canyon State Electric</div>
     <div style="font-size:12px;font-weight:600;color:#FFCA3A;letter-spacing:2px;text-transform:uppercase;margin-top:6px;">Skills Assessment Report</div>
+    <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:8px;">Test Version ${result.testVersion}</div>
   </td></tr>
 
   <!-- Candidate Info -->
@@ -420,6 +445,12 @@ function buildEmailBody(result: EmailResult): string {
       <tr>
         <td style="color:#c8d6e5;font-size:14px;">${languageLabel}</td>
         <td style="color:#c8d6e5;font-size:14px;text-align:right;">${result.timeElapsed}</td>
+      </tr>
+      <tr>
+        <td colspan="2" style="color:#8faabe;font-size:12px;text-transform:uppercase;letter-spacing:1px;padding-top:12px;padding-bottom:4px;">Test Version</td>
+      </tr>
+      <tr>
+        <td colspan="2" style="color:#c8d6e5;font-size:14px;">${result.testVersion}</td>
       </tr>
     </table>
   </td></tr>
@@ -481,7 +512,7 @@ function buildEmailBody(result: EmailResult): string {
   <!-- Footer -->
   <tr><td style="background:#0d2a4a;border-radius:0 0 12px 12px;padding:20px 40px;text-align:center;border-top:1px solid #1e3a5f;">
     <div style="color:#5a7a8f;font-size:12px;">Canyon State Electric &mdash; Employee Owned</div>
-    <div style="color:#3d5a6f;font-size:11px;margin-top:4px;">Adaptive Skills Assessment System</div>
+    <div style="color:#3d5a6f;font-size:11px;margin-top:4px;">Adaptive Skills Assessment System &middot; v${result.testVersion}</div>
   </td></tr>
 
 </table>
@@ -515,6 +546,7 @@ interface EmailResult {
   questionDetails: QuestionDetail[];
   language: string;
   timeElapsed: string;
+  testVersion: string;
 }
 
 // Primary: Brevo HTTP API (works on all cloud platforms including Railway)
