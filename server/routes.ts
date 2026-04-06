@@ -1,9 +1,19 @@
 import type { Express } from "express";
 import type { Server } from "http";
+import fs from "fs";
+import path from "path";
 import { storage } from "./storage";
 import { insertTestSessionSchema } from "../shared/schema";
 import type { CATState, Question } from "../shared/schema";
 import { generatePDFReport, updateMasterSheet } from "./report-generator";
+
+const REPORTS_DIR = process.env.REPORTS_DIR || path.join(process.cwd(), "reports");
+const ADMIN_PASSWORD = process.env.RESET_PASSWORD || "CSE Recruitment 2026";
+
+function verifyAdminPassword(req: any): boolean {
+  const pw = req.headers["x-admin-password"] || "";
+  return pw === ADMIN_PASSWORD;
+}
 import {
   updateTheta,
   selectNextQuestion,
@@ -346,6 +356,94 @@ export function registerRoutes(server: Server, app: Express) {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ─── Admin API ────────────────────────────────────────────────────────────
+
+  // Verify admin password
+  app.post("/api/admin/verify", (req, res) => {
+    if (verifyAdminPassword(req)) {
+      return res.json({ success: true });
+    }
+    return res.status(401).json({ success: false });
+  });
+
+  // List all reports (master sheet + PDFs organized by year/month)
+  app.get("/api/admin/reports", (req, res) => {
+    if (!verifyAdminPassword(req)) return res.status(401).json({ error: "Unauthorized" });
+
+    try {
+      const result: {
+        masterSheet: boolean;
+        years: { year: string; months: { month: string; files: { name: string; path: string; size: number; modified: string }[] }[] }[];
+      } = { masterSheet: false, years: [] };
+
+      // Check for master sheet
+      const masterPath = path.join(REPORTS_DIR, "Assessment_Master_Sheet.xlsx");
+      result.masterSheet = fs.existsSync(masterPath);
+
+      if (!fs.existsSync(REPORTS_DIR)) return res.json(result);
+
+      // Walk year → month → files
+      const years = fs.readdirSync(REPORTS_DIR)
+        .filter(y => /^\d{4}$/.test(y) && fs.statSync(path.join(REPORTS_DIR, y)).isDirectory())
+        .sort().reverse();
+
+      for (const year of years) {
+        const yearPath = path.join(REPORTS_DIR, year);
+        const months = fs.readdirSync(yearPath)
+          .filter(m => fs.statSync(path.join(yearPath, m)).isDirectory())
+          .sort().reverse();
+
+        const yearEntry: typeof result.years[0] = { year, months: [] };
+
+        for (const month of months) {
+          const monthPath = path.join(yearPath, month);
+          const files = fs.readdirSync(monthPath)
+            .filter(f => f.endsWith(".pdf"))
+            .sort().reverse()
+            .map(f => {
+              const stat = fs.statSync(path.join(monthPath, f));
+              return {
+                name: f,
+                path: `${year}/${month}/${f}`,
+                size: stat.size,
+                modified: stat.mtime.toISOString(),
+              };
+            });
+          if (files.length > 0) yearEntry.months.push({ month, files });
+        }
+
+        if (yearEntry.months.length > 0) result.years.push(yearEntry);
+      }
+
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Download master sheet
+  app.get("/api/admin/master-sheet", (req, res) => {
+    if (!verifyAdminPassword(req)) return res.status(401).json({ error: "Unauthorized" });
+    const masterPath = path.join(REPORTS_DIR, "Assessment_Master_Sheet.xlsx");
+    if (!fs.existsSync(masterPath)) return res.status(404).json({ error: "Master sheet not found" });
+    res.download(masterPath, "Assessment_Master_Sheet.xlsx");
+  });
+
+  // Download a specific PDF report
+  app.get("/api/admin/download", (req, res) => {
+    if (!verifyAdminPassword(req)) return res.status(401).json({ error: "Unauthorized" });
+    const filePath = req.query.file as string;
+    if (!filePath) return res.status(400).json({ error: "No file specified" });
+
+    // Security: ensure the path stays within REPORTS_DIR
+    const resolved = path.resolve(REPORTS_DIR, filePath);
+    if (!resolved.startsWith(path.resolve(REPORTS_DIR))) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    if (!fs.existsSync(resolved)) return res.status(404).json({ error: "File not found" });
+    res.download(resolved);
   });
 }
 
