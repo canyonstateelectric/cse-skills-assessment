@@ -1,7 +1,7 @@
-import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { Lock, Download, FileText, Table, ChevronDown, ChevronRight, LogOut, FolderOpen } from "lucide-react";
+import { Lock, Download, FileText, Table, ChevronDown, ChevronRight, LogOut, FolderOpen, Filter } from "lucide-react";
 import { TEST_VERSION } from "@shared/constants";
 
 interface ReportFile {
@@ -9,6 +9,7 @@ interface ReportFile {
   path: string;
   size: number;
   modified: string;
+  level: string;
 }
 
 interface MonthEntry {
@@ -23,6 +24,7 @@ interface YearEntry {
 
 interface ReportsData {
   masterSheet: boolean;
+  levels: string[];
   years: YearEntry[];
 }
 
@@ -52,6 +54,36 @@ function formatDate(modified: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+// Level badge colors — maps diagnosed level to a color scheme
+const LEVEL_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  "Wireman 1":      { bg: "#1a2a3a", text: "#7a9ab5", border: "#2a4a6a" },
+  "Wireman 2":      { bg: "#1a2a3a", text: "#8ab0cc", border: "#2a5070" },
+  "Wireman 3":      { bg: "#0f2a1f", text: "#5cc08a", border: "#1a4a30" },
+  "Wireman 4":      { bg: "#0f2a1f", text: "#3dd68c", border: "#1a5a35" },
+  "Journeyman":     { bg: "#1a2510", text: "#a0c060", border: "#3a5520" },
+  "Leadman":        { bg: "#2a2510", text: "#FFCA3A", border: "#5a4a10" },
+  "Foreman":        { bg: "#2a1a10", text: "#f0a050", border: "#5a3520" },
+  "Superintendent": { bg: "#2a1020", text: "#f06080", border: "#5a2040" },
+};
+
+function LevelBadge({ level }: { level: string }) {
+  if (!level) return null;
+  const colors = LEVEL_COLORS[level] || { bg: "#1a2a3a", text: "#8faabe", border: "#2a4a6a" };
+  return (
+    <span
+      className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
+      style={{
+        background: colors.bg,
+        color: colors.text,
+        border: `1px solid ${colors.border}`,
+        fontFamily: "Montserrat, sans-serif",
+      }}
+    >
+      {level}
+    </span>
+  );
 }
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
@@ -190,6 +222,7 @@ function LoginScreen({ onLogin }: { onLogin: (pw: string) => void }) {
 function Dashboard({ password, onLogout }: { password: string; onLogout: () => void }) {
   const [expandedYears, setExpandedYears] = useState<Record<string, boolean>>({});
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});
+  const [levelFilter, setLevelFilter] = useState<string>("all");
 
   const { data, isLoading, error } = useQuery<ReportsData>({
     queryKey: ["/api/admin/reports"],
@@ -201,7 +234,39 @@ function Dashboard({ password, onLogout }: { password: string; onLogout: () => v
     },
   });
 
+  // Apply level filter to data
+  const filteredData = useMemo(() => {
+    if (!data || levelFilter === "all") return data;
+
+    const filtered: ReportsData = {
+      masterSheet: data.masterSheet,
+      levels: data.levels,
+      years: [],
+    };
+
+    for (const yearEntry of data.years) {
+      const filteredMonths: MonthEntry[] = [];
+      for (const monthEntry of yearEntry.months) {
+        const filteredFiles = monthEntry.files.filter(f => f.level === levelFilter);
+        if (filteredFiles.length > 0) {
+          filteredMonths.push({ month: monthEntry.month, files: filteredFiles });
+        }
+      }
+      if (filteredMonths.length > 0) {
+        filtered.years.push({ year: yearEntry.year, months: filteredMonths });
+      }
+    }
+
+    return filtered;
+  }, [data, levelFilter]);
+
   const totalFiles =
+    filteredData?.years.reduce(
+      (sum, y) => sum + y.months.reduce((s, m) => s + m.files.length, 0),
+      0
+    ) ?? 0;
+
+  const totalAllFiles =
     data?.years.reduce(
       (sum, y) => sum + y.months.reduce((s, m) => s + m.files.length, 0),
       0
@@ -217,7 +282,6 @@ function Dashboard({ password, onLogout }: { password: string; onLogout: () => v
 
   function downloadFile(filePath: string, fileName: string) {
     const url = `/api/admin/download?file=${encodeURIComponent(filePath)}`;
-    // Create a hidden link with the password header via fetch
     fetch(url, { headers: { "x-admin-password": password } })
       .then((res) => res.blob())
       .then((blob) => {
@@ -307,7 +371,7 @@ function Dashboard({ password, onLogout }: { password: string; onLogout: () => v
           <>
             {/* Summary bar */}
             <div
-              className="rounded-xl p-5 mb-6 flex items-center gap-6"
+              className="rounded-xl p-5 mb-6 flex flex-wrap items-center gap-6"
               style={{ background: "#0f2d4f" }}
             >
               <div>
@@ -315,13 +379,18 @@ function Dashboard({ password, onLogout }: { password: string; onLogout: () => v
                   className="text-xs uppercase tracking-widest mb-1"
                   style={{ color: "#8faabe", fontFamily: "Montserrat, sans-serif" }}
                 >
-                  Total Reports
+                  {levelFilter === "all" ? "Total Reports" : "Filtered Reports"}
                 </p>
                 <p
                   className="text-3xl font-black text-white"
                   style={{ fontFamily: "Montserrat, sans-serif" }}
                 >
                   {totalFiles}
+                  {levelFilter !== "all" && (
+                    <span className="text-base font-normal ml-2" style={{ color: "#4a6a8a" }}>
+                      / {totalAllFiles}
+                    </span>
+                  )}
                 </p>
               </div>
               <div
@@ -342,7 +411,7 @@ function Dashboard({ password, onLogout }: { password: string; onLogout: () => v
                   {data.years.length}
                 </p>
               </div>
-              <div className="ml-auto">
+              <div className="ml-auto flex items-center gap-3 flex-wrap">
                 {/* Master Sheet download */}
                 {data.masterSheet ? (
                   <button
@@ -371,8 +440,57 @@ function Dashboard({ password, onLogout }: { password: string; onLogout: () => v
               </div>
             </div>
 
+            {/* Filter bar */}
+            {data.levels.length > 0 && (
+              <div
+                className="rounded-xl px-5 py-4 mb-6 flex items-center gap-4"
+                style={{ background: "#0f2d4f", border: "1px solid #1e4a7a" }}
+              >
+                <Filter size={14} style={{ color: "#8faabe", flexShrink: 0 }} />
+                <p
+                  className="text-xs font-bold uppercase tracking-widest"
+                  style={{ color: "#8faabe", fontFamily: "Montserrat, sans-serif", flexShrink: 0 }}
+                >
+                  Filter by Level
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setLevelFilter("all")}
+                    className="px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wider transition-all"
+                    style={{
+                      background: levelFilter === "all" ? "#136BAC" : "#0d2a4a",
+                      color: levelFilter === "all" ? "#fff" : "#6a8aaa",
+                      border: `1px solid ${levelFilter === "all" ? "#136BAC" : "#1e4a7a"}`,
+                      fontFamily: "Montserrat, sans-serif",
+                    }}
+                  >
+                    All
+                  </button>
+                  {data.levels.map((level) => {
+                    const isActive = levelFilter === level;
+                    const colors = LEVEL_COLORS[level] || { bg: "#1a2a3a", text: "#8faabe", border: "#2a4a6a" };
+                    return (
+                      <button
+                        key={level}
+                        onClick={() => setLevelFilter(isActive ? "all" : level)}
+                        className="px-3 py-1.5 rounded-full text-[11px] font-bold uppercase tracking-wider transition-all"
+                        style={{
+                          background: isActive ? colors.text : colors.bg,
+                          color: isActive ? "#0c1f35" : colors.text,
+                          border: `1px solid ${isActive ? colors.text : colors.border}`,
+                          fontFamily: "Montserrat, sans-serif",
+                        }}
+                      >
+                        {level}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* No reports yet */}
-            {data.years.length === 0 && (
+            {filteredData && filteredData.years.length === 0 && (
               <div
                 className="rounded-xl p-12 text-center"
                 style={{ background: "#0f2d4f" }}
@@ -382,19 +500,35 @@ function Dashboard({ password, onLogout }: { password: string; onLogout: () => v
                   className="text-base font-bold mb-2"
                   style={{ color: "#8faabe", fontFamily: "Montserrat, sans-serif" }}
                 >
-                  No Reports Yet
+                  {levelFilter === "all" ? "No Reports Yet" : `No ${levelFilter} Reports`}
                 </p>
                 <p
                   className="text-sm"
                   style={{ color: "#4a6a8a", fontFamily: "Merriweather, serif" }}
                 >
-                  Reports will appear here after candidates complete the assessment.
+                  {levelFilter === "all"
+                    ? "Reports will appear here after candidates complete the assessment."
+                    : "No candidates have been diagnosed at this level yet."}
                 </p>
+                {levelFilter !== "all" && (
+                  <button
+                    onClick={() => setLevelFilter("all")}
+                    className="mt-4 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all"
+                    style={{
+                      background: "#0d2a4a",
+                      color: "#136BAC",
+                      border: "1px solid #136BAC",
+                      fontFamily: "Montserrat, sans-serif",
+                    }}
+                  >
+                    Clear Filter
+                  </button>
+                )}
               </div>
             )}
 
             {/* Year / Month / File tree */}
-            {data.years.map((yearEntry) => (
+            {filteredData && filteredData.years.map((yearEntry) => (
               <div key={yearEntry.year} className="mb-4">
                 {/* Year header */}
                 <button
@@ -481,14 +615,17 @@ function Dashboard({ password, onLogout }: { password: string; onLogout: () => v
                                     style={{ color: "#136BAC", flexShrink: 0 }}
                                   />
                                   <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2.5 flex-wrap">
+                                      <p
+                                        className="font-semibold text-sm text-white truncate"
+                                        style={{ fontFamily: "Montserrat, sans-serif" }}
+                                      >
+                                        {formatFileName(file.name)}
+                                      </p>
+                                      <LevelBadge level={file.level} />
+                                    </div>
                                     <p
-                                      className="font-semibold text-sm text-white truncate"
-                                      style={{ fontFamily: "Montserrat, sans-serif" }}
-                                    >
-                                      {formatFileName(file.name)}
-                                    </p>
-                                    <p
-                                      className="text-xs"
+                                      className="text-xs mt-0.5"
                                       style={{
                                         color: "#4a6a8a",
                                         fontFamily: "Merriweather, serif",

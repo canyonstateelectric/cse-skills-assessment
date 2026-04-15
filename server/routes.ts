@@ -6,6 +6,7 @@ import { storage } from "./storage";
 import { insertTestSessionSchema } from "../shared/schema";
 import type { CATState, Question } from "../shared/schema";
 import { generatePDFReport, updateMasterSheet } from "./report-generator";
+import ExcelJS from "exceljs";
 
 const REPORTS_DIR = process.env.REPORTS_DIR || path.join(process.cwd(), "reports");
 const ADMIN_PASSWORD = process.env.RESET_PASSWORD || "CSE Recruitment 2026";
@@ -369,18 +370,77 @@ export function registerRoutes(server: Server, app: Express) {
   });
 
   // List all reports (master sheet + PDFs organized by year/month)
-  app.get("/api/admin/reports", (req, res) => {
+  // Also reads the master sheet to include diagnosed level for each candidate
+  app.get("/api/admin/reports", async (req, res) => {
     if (!verifyAdminPassword(req)) return res.status(401).json({ error: "Unauthorized" });
 
     try {
       const result: {
         masterSheet: boolean;
-        years: { year: string; months: { month: string; files: { name: string; path: string; size: number; modified: string }[] }[] }[];
-      } = { masterSheet: false, years: [] };
+        levels: string[];
+        years: { year: string; months: { month: string; files: { name: string; path: string; size: number; modified: string; level: string }[] }[] }[];
+      } = { masterSheet: false, levels: [], years: [] };
 
-      // Check for master sheet
+      // Check for master sheet and build name→level lookup
       const masterPath = path.join(REPORTS_DIR, "Assessment_Master_Sheet.xlsx");
       result.masterSheet = fs.existsSync(masterPath);
+
+      // Build lookup: "LastName_FirstName" → diagnosed level from master sheet
+      const levelLookup: Record<string, string> = {};
+      const allLevels = new Set<string>();
+      if (result.masterSheet) {
+        try {
+          const wb = new ExcelJS.Workbook();
+          await wb.xlsx.readFile(masterPath);
+          const sheet = wb.getWorksheet("All Candidates");
+          if (sheet) {
+            // Find column indices by header
+            const headerRow = sheet.getRow(1);
+            let nameCol = -1, levelCol = -1;
+            headerRow.eachCell((cell, colNum) => {
+              const val = String(cell.value || "").toLowerCase().trim();
+              if (val === "name") nameCol = colNum;
+              if (val === "diagnosed level") levelCol = colNum;
+            });
+            if (nameCol > 0 && levelCol > 0) {
+              sheet.eachRow((row, rowNum) => {
+                if (rowNum === 1) return; // skip header
+                const fullName = String(row.getCell(nameCol).value || "").trim();
+                const level = String(row.getCell(levelCol).value || "").trim();
+                if (fullName && level) {
+                  // Master sheet stores "LastName, FirstName" (e.g. "Rodriguez, Maria")
+                  // PDF filename is "MM-DD-YYYY_LastName_FirstName.pdf"
+                  // Build lookup key as "lastname_firstname"
+                  if (fullName.includes(",")) {
+                    // "Rodriguez, Maria" → key = "rodriguez_maria"
+                    const [last, first] = fullName.split(",").map(s => s.trim());
+                    if (last && first) {
+                      const key = `${last}_${first}`.toLowerCase();
+                      levelLookup[key] = level;
+                    }
+                  } else {
+                    // Fallback for "FirstName LastName" format
+                    const parts = fullName.split(/\s+/);
+                    if (parts.length >= 2) {
+                      const first = parts[0];
+                      const last = parts.slice(1).join(" ");
+                      const key = `${last}_${first}`.toLowerCase();
+                      levelLookup[key] = level;
+                    }
+                  }
+                  allLevels.add(level);
+                }
+              });
+            }
+          }
+        } catch (e) {
+          // If master sheet is unreadable, continue without levels
+        }
+      }
+
+      // Canonical level order for the filter dropdown
+      const levelOrder = ["Wireman 1", "Wireman 2", "Wireman 3", "Wireman 4", "Journeyman", "Leadman", "Foreman", "Superintendent"];
+      result.levels = levelOrder.filter(l => allLevels.has(l));
 
       if (!fs.existsSync(REPORTS_DIR)) return res.json(result);
 
@@ -404,11 +464,20 @@ export function registerRoutes(server: Server, app: Express) {
             .sort().reverse()
             .map(f => {
               const stat = fs.statSync(path.join(monthPath, f));
+              // Extract level from master sheet: filename = "04-03-2026_Rodriguez_Maria.pdf"
+              const withoutExt = f.replace(/\.pdf$/, "");
+              const parts = withoutExt.split("_");
+              let level = "";
+              if (parts.length >= 3) {
+                const lookupKey = `${parts[1]}_${parts[2]}`.toLowerCase();
+                level = levelLookup[lookupKey] || "";
+              }
               return {
                 name: f,
                 path: `${year}/${month}/${f}`,
                 size: stat.size,
                 modified: stat.mtime.toISOString(),
+                level,
               };
             });
           if (files.length > 0) yearEntry.months.push({ month, files });

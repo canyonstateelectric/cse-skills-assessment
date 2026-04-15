@@ -146,9 +146,12 @@ export function selectNextQuestion(state: CATState, questions: Question[]): Ques
 }
 
 // Check if we should stop the test
-// Minimum raised to 25 to ensure adequate sampling across levels;
+// Minimum raised to 30 to ensure adequate sampling across levels;
 // candidates at higher levels must answer enough questions to demonstrate breadth.
-export function shouldTerminate(state: CATState, minQuestions: number = 25, maxQuestions: number = 50): {
+// The "adequate precision" shortcut (SE < 0.45 at 35 questions) has been removed —
+// it was too loose (~2 skill levels of uncertainty) and caused premature termination
+// for high-ability candidates who hadn't been fully probed at upper levels.
+export function shouldTerminate(state: CATState, minQuestions: number = 30, maxQuestions: number = 50): {
   terminate: boolean;
   reason: string;
 } {
@@ -165,13 +168,9 @@ export function shouldTerminate(state: CATState, minQuestions: number = 25, maxQ
   }
 
   // Standard error is small enough for confident classification
-  if (state.se < 0.30) {
+  // Tightened from 0.30 to 0.25 for higher confidence (~1 level width at 95% CI)
+  if (state.se < 0.25) {
     return { terminate: true, reason: "precision_reached" };
-  }
-
-  // If after 35 questions SE is still moderate, check if classification is stable
-  if (numAnswered >= 35 && state.se < 0.45) {
-    return { terminate: true, reason: "adequate_precision" };
   }
 
   return { terminate: false, reason: "continuing" };
