@@ -21,6 +21,7 @@ import {
   shouldTerminate,
   diagnoseLevel,
   getLevelConfidence,
+  getLevelConfidenceDetails,
   getDomainScores,
 } from "./cat-engine";
 
@@ -179,7 +180,8 @@ export function registerRoutes(server: Server, app: Express) {
       if (termination.terminate) {
         // Test is complete
         const diagnosedLevel = diagnoseLevel(theta);
-        const confidence = getLevelConfidence(theta, se);
+        const confidenceDetails = getLevelConfidenceDetails(theta, se);
+        const confidence = confidenceDetails.confidence;
         const domainScores = getDomainScores(state.responses, questions);
 
         await storage.updateSession(sessionId, {
@@ -230,6 +232,8 @@ export function registerRoutes(server: Server, app: Express) {
           correctAnswers: correctCount,
           domainScores,
           levelConfidence: confidence,
+          borderline: confidenceDetails.borderline,
+          secondaryLevel: confidenceDetails.secondaryLevel,
           questionDetails,
           language: session.language || "en",
           timeElapsed,
@@ -258,6 +262,8 @@ export function registerRoutes(server: Server, app: Express) {
           correctAnswers: correctCount,
           domainScores,
           levelConfidence: confidence,
+          borderline: confidenceDetails.borderline,
+          secondaryLevel: confidenceDetails.secondaryLevel,
           questionDetails,
           language: session.language || "en",
           timeElapsed,
@@ -378,15 +384,16 @@ export function registerRoutes(server: Server, app: Express) {
       const result: {
         masterSheet: boolean;
         levels: string[];
-        years: { year: string; months: { month: string; files: { name: string; path: string; size: number; modified: string; level: string }[] }[] }[];
+        years: { year: string; months: { month: string; files: { name: string; path: string; size: number; modified: string; level: string; version: string }[] }[] }[];
       } = { masterSheet: false, levels: [], years: [] };
 
-      // Check for master sheet and build name→level lookup
+      // Check for master sheet and build name→level+version lookup
       const masterPath = path.join(REPORTS_DIR, "Assessment_Master_Sheet.xlsx");
       result.masterSheet = fs.existsSync(masterPath);
 
-      // Build lookup: "LastName_FirstName" → diagnosed level from master sheet
+      // Build lookup: "LastName_FirstName" → {level, version} from master sheet
       const levelLookup: Record<string, string> = {};
+      const versionLookup: Record<string, string> = {};
       const allLevels = new Set<string>();
       if (result.masterSheet) {
         try {
@@ -396,37 +403,38 @@ export function registerRoutes(server: Server, app: Express) {
           if (sheet) {
             // Find column indices by header
             const headerRow = sheet.getRow(1);
-            let nameCol = -1, levelCol = -1;
+            let nameCol = -1, levelCol = -1, versionCol = -1;
             headerRow.eachCell((cell, colNum) => {
               const val = String(cell.value || "").toLowerCase().trim();
               if (val === "name") nameCol = colNum;
               if (val === "diagnosed level") levelCol = colNum;
+              if (val === "test version") versionCol = colNum;
             });
             if (nameCol > 0 && levelCol > 0) {
               sheet.eachRow((row, rowNum) => {
                 if (rowNum === 1) return; // skip header
                 const fullName = String(row.getCell(nameCol).value || "").trim();
                 const level = String(row.getCell(levelCol).value || "").trim();
+                const version = versionCol > 0 ? String(row.getCell(versionCol).value || "").trim() : "";
                 if (fullName && level) {
                   // Master sheet stores "LastName, FirstName" (e.g. "Rodriguez, Maria")
                   // PDF filename is "MM-DD-YYYY_LastName_FirstName.pdf"
                   // Build lookup key as "lastname_firstname"
+                  let key = "";
                   if (fullName.includes(",")) {
-                    // "Rodriguez, Maria" → key = "rodriguez_maria"
                     const [last, first] = fullName.split(",").map(s => s.trim());
-                    if (last && first) {
-                      const key = `${last}_${first}`.toLowerCase();
-                      levelLookup[key] = level;
-                    }
+                    if (last && first) key = `${last}_${first}`.toLowerCase();
                   } else {
-                    // Fallback for "FirstName LastName" format
                     const parts = fullName.split(/\s+/);
                     if (parts.length >= 2) {
                       const first = parts[0];
                       const last = parts.slice(1).join(" ");
-                      const key = `${last}_${first}`.toLowerCase();
-                      levelLookup[key] = level;
+                      key = `${last}_${first}`.toLowerCase();
                     }
+                  }
+                  if (key) {
+                    levelLookup[key] = level;
+                    if (version) versionLookup[key] = version;
                   }
                   allLevels.add(level);
                 }
@@ -468,9 +476,11 @@ export function registerRoutes(server: Server, app: Express) {
               const withoutExt = f.replace(/\.pdf$/, "");
               const parts = withoutExt.split("_");
               let level = "";
+              let version = "";
               if (parts.length >= 3) {
                 const lookupKey = `${parts[1]}_${parts[2]}`.toLowerCase();
                 level = levelLookup[lookupKey] || "";
+                version = versionLookup[lookupKey] || "";
               }
               return {
                 name: f,
@@ -478,6 +488,7 @@ export function registerRoutes(server: Server, app: Express) {
                 size: stat.size,
                 modified: stat.mtime.toISOString(),
                 level,
+                version,
               };
             });
           if (files.length > 0) yearEntry.months.push({ month, files });
@@ -627,6 +638,7 @@ function buildEmailBody(result: EmailResult): string {
     <div style="color:rgba(255,255,255,0.7);font-size:11px;text-transform:uppercase;letter-spacing:2px;margin-bottom:4px;">Diagnosed Level</div>
     <div style="color:#fff;font-size:28px;font-weight:800;text-transform:uppercase;letter-spacing:1px;">${levelLabel}</div>
     <div style="color:rgba(255,255,255,0.8);font-size:13px;margin-top:4px;">Confidence: ${result.levelConfidence}%</div>
+    ${result.borderline && result.secondaryLevel ? `<div style="color:#FFCA3A;font-size:12px;margin-top:6px;">Borderline &mdash; possible range: ${levelLabel} to ${result.secondaryLevel.replace(/wireman(\d)/i, 'Wireman $1')}</div>` : ''}
   </td></tr>
 
   <!-- Summary Stats -->
@@ -710,6 +722,8 @@ interface EmailResult {
   correctAnswers: number;
   domainScores: Record<string, { correct: number; total: number }>;
   levelConfidence: number;
+  borderline: boolean;
+  secondaryLevel: string | null;
   questionDetails: QuestionDetail[];
   language: string;
   timeElapsed: string;

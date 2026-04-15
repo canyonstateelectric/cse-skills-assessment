@@ -222,7 +222,7 @@ export default function TestPage() {
     domain.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
   const progressPercent = progress
-    ? Math.min((progress.questionsAnswered / 50) * 100, 100)
+    ? Math.min((progress.questionsAnswered / 60) * 100, 100)
     : 0;
 
   if (isLoading) {

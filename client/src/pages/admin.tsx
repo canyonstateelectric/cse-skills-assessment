@@ -10,6 +10,7 @@ interface ReportFile {
   size: number;
   modified: string;
   level: string;
+  version: string;
 }
 
 interface MonthEntry {
@@ -623,6 +624,19 @@ function Dashboard({ password, onLogout }: { password: string; onLogout: () => v
                                         {formatFileName(file.name)}
                                       </p>
                                       <LevelBadge level={file.level} />
+                                      {file.version && (
+                                        <span
+                                          className="inline-flex items-center px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider"
+                                          style={{
+                                            background: "#0d2a4a",
+                                            color: "#4a6a8a",
+                                            border: "1px solid #1e3a5a",
+                                            fontFamily: "Montserrat, sans-serif",
+                                          }}
+                                        >
+                                          v{file.version}
+                                        </span>
+                                      )}
                                     </div>
                                     <p
                                       className="text-xs mt-0.5"

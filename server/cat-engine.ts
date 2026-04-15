@@ -151,7 +151,7 @@ export function selectNextQuestion(state: CATState, questions: Question[]): Ques
 // The "adequate precision" shortcut (SE < 0.45 at 35 questions) has been removed —
 // it was too loose (~2 skill levels of uncertainty) and caused premature termination
 // for high-ability candidates who hadn't been fully probed at upper levels.
-export function shouldTerminate(state: CATState, minQuestions: number = 30, maxQuestions: number = 50): {
+export function shouldTerminate(state: CATState, minQuestions: number = 30, maxQuestions: number = 60): {
   terminate: boolean;
   reason: string;
 } {
@@ -189,33 +189,85 @@ export function diagnoseLevel(theta: number): string {
   return "Superintendent";
 }
 
-// Get level confidence as a percentage
+// All level boundaries in order
+const ALL_LEVELS = [
+  { name: "Wireman 1",      lower: -4,   upper: -1.5 },
+  { name: "Wireman 2",      lower: -1.5, upper: -0.5 },
+  { name: "Wireman 3",      lower: -0.5, upper: 0.5  },
+  { name: "Wireman 4",      lower: 0.5,  upper: 1.0  },
+  { name: "Journeyman",     lower: 1.0,  upper: 1.5  },
+  { name: "Leadman",        lower: 1.5,  upper: 2.0  },
+  { name: "Foreman",        lower: 2.0,  upper: 2.5  },
+  { name: "Superintendent", lower: 2.5,  upper: 4    },
+];
+
+// Calculate probability that true ability falls in each level's range
+function getLevelProbabilities(theta: number, se: number): Array<{ name: string; probability: number }> {
+  return ALL_LEVELS.map(level => {
+    const lowerZ = (level.lower - theta) / se;
+    const upperZ = (level.upper - theta) / se;
+    return {
+      name: level.name,
+      probability: normalCDF(upperZ) - normalCDF(lowerZ),
+    };
+  });
+}
+
+// Get level confidence as a percentage + borderline info
+// Returns confidence for the diagnosed level and, if borderline (<65%), the adjacent level
 export function getLevelConfidence(theta: number, se: number): number {
   const level = diagnoseLevel(theta);
-  const boundaries = getLevelBoundaries(level);
+  const probs = getLevelProbabilities(theta, se);
+  const diagnosedProb = probs.find(p => p.name === level)?.probability || 0;
 
-  // Probability that true ability falls within the diagnosed level's range
-  const lowerZ = (boundaries.lower - theta) / se;
-  const upperZ = (boundaries.upper - theta) / se;
+  // Find the top two levels by probability
+  const sorted = [...probs].sort((a, b) => b.probability - a.probability);
+  const topProb = sorted[0]?.probability || 0;
+  const secondProb = sorted[1]?.probability || 0;
 
-  const pLower = normalCDF(lowerZ);
-  const pUpper = normalCDF(upperZ);
+  // If the diagnosed level covers most of the probability mass relative to the next-best,
+  // use a relative confidence: diagnosed / (diagnosed + secondBest)
+  // This avoids the ~50% ceiling when theta sits on a boundary
+  const relativeConfidence = topProb / (topProb + secondProb);
 
-  return Math.round((pUpper - pLower) * 100);
+  // Blend: use the higher of absolute and relative, capped at 99
+  const confidence = Math.min(99, Math.round(Math.max(diagnosedProb, relativeConfidence) * 100));
+
+  return confidence;
+}
+
+// Get extended confidence info (for reports) — includes borderline range
+export function getLevelConfidenceDetails(theta: number, se: number): {
+  confidence: number;
+  borderline: boolean;
+  primaryLevel: string;
+  secondaryLevel: string | null;
+} {
+  const level = diagnoseLevel(theta);
+  const probs = getLevelProbabilities(theta, se);
+
+  const sorted = [...probs].sort((a, b) => b.probability - a.probability);
+  const topLevel = sorted[0];
+  const secondLevel = sorted[1];
+
+  const diagnosedProb = probs.find(p => p.name === level)?.probability || 0;
+  const relativeConfidence = topLevel.probability / (topLevel.probability + (secondLevel?.probability || 0));
+  const confidence = Math.min(99, Math.round(Math.max(diagnosedProb, relativeConfidence) * 100));
+
+  // Borderline if the second-most-likely level has >25% probability
+  const isBorderline = (secondLevel?.probability || 0) > 0.25;
+
+  return {
+    confidence,
+    borderline: isBorderline,
+    primaryLevel: level,
+    secondaryLevel: isBorderline ? secondLevel!.name : null,
+  };
 }
 
 function getLevelBoundaries(level: string): { lower: number; upper: number } {
-  const boundaries: Record<string, { lower: number; upper: number }> = {
-    "Wireman 1": { lower: -4, upper: -1.5 },
-    "Wireman 2": { lower: -1.5, upper: -0.5 },
-    "Wireman 3": { lower: -0.5, upper: 0.5 },
-    "Wireman 4": { lower: 0.5, upper: 1.0 },
-    "Journeyman": { lower: 1.0, upper: 1.5 },
-    "Leadman": { lower: 1.5, upper: 2.0 },
-    "Foreman": { lower: 2.0, upper: 2.5 },
-    "Superintendent": { lower: 2.5, upper: 4 },
-  };
-  return boundaries[level] || { lower: -4, upper: 4 };
+  const found = ALL_LEVELS.find(l => l.name === level);
+  return found || { lower: -4, upper: 4 };
 }
 
 function normalCDF(x: number): number {

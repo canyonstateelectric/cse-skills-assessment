@@ -29,6 +29,8 @@ interface ReportData {
   correctAnswers: number;
   domainScores: Record<string, { correct: number; total: number }>;
   levelConfidence: number;
+  borderline: boolean;
+  secondaryLevel: string | null;
   questionDetails: QuestionDetail[];
   language: string;
   timeElapsed: string;
@@ -129,14 +131,19 @@ export async function generatePDFReport(data: ReportData): Promise<string> {
     y += 25;
 
     // ----- Diagnosed Level Banner -----
-    doc.rect(50, y, pageW, 55).fill(cseBlue);
+    const bannerH = data.borderline && data.secondaryLevel ? 70 : 55;
+    doc.rect(50, y, pageW, bannerH).fill(cseBlue);
     doc.fontSize(7).font("Helvetica").fillColor("rgba(255,255,255,0.7)");
     doc.text("DIAGNOSED LEVEL", 50, y + 8, { width: pageW, align: "center" });
     doc.fontSize(22).font("Helvetica-Bold").fillColor(white);
     doc.text(levelLabel.toUpperCase(), 50, y + 19, { width: pageW, align: "center" });
     doc.fontSize(9).font("Helvetica").fillColor("rgba(255,255,255,0.8)");
     doc.text(`Confidence: ${data.levelConfidence}%`, 50, y + 43, { width: pageW, align: "center" });
-    y += 70;
+    if (data.borderline && data.secondaryLevel) {
+      doc.fontSize(8).font("Helvetica").fillColor(gold);
+      doc.text(`Borderline — possible range: ${levelLabel} to ${formatLevel(data.secondaryLevel)}`, 50, y + 56, { width: pageW, align: "center" });
+    }
+    y += bannerH + 15;
 
     // ----- Summary Stats -----
     doc.fontSize(8).font("Helvetica-Bold").fillColor(gold);
@@ -302,6 +309,12 @@ export async function updateMasterSheet(data: ReportData): Promise<string> {
     workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(masterPath);
     sheet = workbook.getWorksheet("All Candidates") || workbook.addWorksheet("All Candidates");
+    // CRITICAL: Re-assign column keys after reading — ExcelJS does not persist
+    // key mappings from file. Without this, addRow({...}) produces blank rows.
+    columns.forEach((colDef, i) => {
+      const col = sheet.getColumn(i + 1);
+      col.key = colDef.key;
+    });
   } else {
     workbook = new ExcelJS.Workbook();
     workbook.creator = "Canyon State Electric";
