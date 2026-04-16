@@ -269,8 +269,11 @@ export function registerRoutes(server: Server, app: Express) {
           timeElapsed,
           testVersion: TEST_VERSION,
         };
-        generatePDFReport(reportData).catch((e) => console.error("PDF generation error:", e));
-        updateMasterSheet(reportData).catch((e) => console.error("Master sheet update error:", e));
+        // Generate PDF first, then pass its filename to the master sheet
+        generatePDFReport(reportData).then((pdfPath) => {
+          const pdfFileName = path.basename(pdfPath);
+          updateMasterSheet(reportData, pdfFileName).catch((e) => console.error("Master sheet update error:", e));
+        }).catch((e) => console.error("PDF generation error:", e));
 
         return res.json({
           nextQuestion: null,
@@ -387,13 +390,14 @@ export function registerRoutes(server: Server, app: Express) {
         years: { year: string; months: { month: string; files: { name: string; path: string; size: number; modified: string; level: string; version: string }[] }[] }[];
       } = { masterSheet: false, levels: [], years: [] };
 
-      // Check for master sheet and build name→level+version lookup
+      // Check for master sheet and build file-based lookup
       const masterPath = path.join(REPORTS_DIR, "Assessment_Master_Sheet.xlsx");
       result.masterSheet = fs.existsSync(masterPath);
 
-      // Build lookup: "LastName_FirstName" → {level, version} from master sheet
-      const levelLookup: Record<string, string> = {};
-      const versionLookup: Record<string, string> = {};
+      // Primary lookup: exact PDF filename → {level, version}
+      // Fallback lookup: "lastname_firstname" → {level, version} (for legacy rows without filename)
+      const fileLookup: Record<string, { level: string; version: string }> = {};
+      const nameLookup: Record<string, { level: string; version: string }> = {};
       const allLevels = new Set<string>();
       if (result.masterSheet) {
         try {
@@ -401,42 +405,47 @@ export function registerRoutes(server: Server, app: Express) {
           await wb.xlsx.readFile(masterPath);
           const sheet = wb.getWorksheet("All Candidates");
           if (sheet) {
-            // Find column indices by header
             const headerRow = sheet.getRow(1);
-            let nameCol = -1, levelCol = -1, versionCol = -1;
+            let fileCol = -1, nameCol = -1, levelCol = -1, versionCol = -1;
             headerRow.eachCell((cell, colNum) => {
               const val = String(cell.value || "").toLowerCase().trim();
+              if (val === "pdf file") fileCol = colNum;
               if (val === "name") nameCol = colNum;
               if (val === "diagnosed level") levelCol = colNum;
               if (val === "test version") versionCol = colNum;
             });
-            if (nameCol > 0 && levelCol > 0) {
+            if (levelCol > 0) {
               sheet.eachRow((row, rowNum) => {
-                if (rowNum === 1) return; // skip header
-                const fullName = String(row.getCell(nameCol).value || "").trim();
+                if (rowNum === 1) return;
                 const level = String(row.getCell(levelCol).value || "").trim();
                 const version = versionCol > 0 ? String(row.getCell(versionCol).value || "").trim() : "";
-                if (fullName && level) {
-                  // Master sheet stores "LastName, FirstName" (e.g. "Rodriguez, Maria")
-                  // PDF filename is "MM-DD-YYYY_LastName_FirstName.pdf"
-                  // Build lookup key as "lastname_firstname"
-                  let key = "";
-                  if (fullName.includes(",")) {
-                    const [last, first] = fullName.split(",").map(s => s.trim());
-                    if (last && first) key = `${last}_${first}`.toLowerCase();
-                  } else {
-                    const parts = fullName.split(/\s+/);
-                    if (parts.length >= 2) {
-                      const first = parts[0];
-                      const last = parts.slice(1).join(" ");
-                      key = `${last}_${first}`.toLowerCase();
+                if (!level) return;
+                allLevels.add(level);
+
+                // Primary: exact filename match
+                if (fileCol > 0) {
+                  const pdfFile = String(row.getCell(fileCol).value || "").trim();
+                  if (pdfFile) {
+                    fileLookup[pdfFile.toLowerCase()] = { level, version };
+                  }
+                }
+
+                // Fallback: name-based match for legacy rows
+                if (nameCol > 0) {
+                  const fullName = String(row.getCell(nameCol).value || "").trim();
+                  if (fullName) {
+                    let key = "";
+                    if (fullName.includes(",")) {
+                      const [last, first] = fullName.split(",").map(s => s.trim());
+                      if (last && first) key = `${last}_${first}`.toLowerCase();
+                    } else {
+                      const parts = fullName.split(/\s+/);
+                      if (parts.length >= 2) {
+                        key = `${parts.slice(1).join(" ")}_${parts[0]}`.toLowerCase();
+                      }
                     }
+                    if (key) nameLookup[key] = { level, version };
                   }
-                  if (key) {
-                    levelLookup[key] = level;
-                    if (version) versionLookup[key] = version;
-                  }
-                  allLevels.add(level);
                 }
               });
             }
@@ -472,15 +481,26 @@ export function registerRoutes(server: Server, app: Express) {
             .sort().reverse()
             .map(f => {
               const stat = fs.statSync(path.join(monthPath, f));
-              // Extract level from master sheet: filename = "04-03-2026_Rodriguez_Maria.pdf"
-              const withoutExt = f.replace(/\.pdf$/, "");
-              const parts = withoutExt.split("_");
+              // Match to master sheet: try exact filename first, then name-based fallback
               let level = "";
               let version = "";
-              if (parts.length >= 3) {
-                const lookupKey = `${parts[1]}_${parts[2]}`.toLowerCase();
-                level = levelLookup[lookupKey] || "";
-                version = versionLookup[lookupKey] || "";
+              const exactMatch = fileLookup[f.toLowerCase()];
+              if (exactMatch) {
+                level = exactMatch.level;
+                version = exactMatch.version;
+              } else {
+                // Fallback: parse name from filename
+                // Supports both "DATE_Last_First.pdf" and "DATE_Last_First_HHMMSS.pdf"
+                const withoutExt = f.replace(/\.pdf$/, "");
+                const parts = withoutExt.split("_");
+                if (parts.length >= 3) {
+                  const lookupKey = `${parts[1]}_${parts[2]}`.toLowerCase();
+                  const nameMatch = nameLookup[lookupKey];
+                  if (nameMatch) {
+                    level = nameMatch.level;
+                    version = nameMatch.version;
+                  }
+                }
               }
               return {
                 name: f,

@@ -36,12 +36,16 @@ function formatBytes(bytes: number): string {
 }
 
 function formatFileName(name: string): string {
-  // "04-03-2026_Rodriguez_Maria.pdf" -> "Maria Rodriguez"
+  // Supports both formats:
+  //   "04-03-2026_Rodriguez_Maria.pdf" -> "Maria Rodriguez"
+  //   "04-03-2026_Rodriguez_Maria_143022.pdf" -> "Maria Rodriguez"
   const withoutExt = name.replace(/\.pdf$/, "");
   const parts = withoutExt.split("_");
   if (parts.length >= 3) {
-    const last = parts[1];
-    const first = parts[2];
+    const last = parts[1].replace(/-/g, " ");
+    // parts[2] may have a timestamp suffix like "Maria" or could be just the first name
+    // If parts.length === 4, parts[3] is the HHMMSS timestamp
+    const first = parts[2].replace(/-/g, " ");
     return `${first} ${last}`;
   }
   return withoutExt;

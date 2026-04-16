@@ -72,7 +72,10 @@ export async function generatePDFReport(data: ReportData): Promise<string> {
   const folderPath = path.join(REPORTS_DIR, year, `${month} - ${monthName}`);
   ensureDir(folderPath);
 
-  const fileName = `${dateStr}_${data.lastName}_${data.firstName}.pdf`;
+  // Include HHMMSS timestamp to prevent filename collisions
+  // (same person retaking, or two people with the same name on the same day)
+  const timeStamp = now.toLocaleTimeString("en-US", { timeZone: "America/Phoenix", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }).replace(/:/g, "");
+  const fileName = `${dateStr}_${data.lastName}_${data.firstName}_${timeStamp}.pdf`;
   const filePath = path.join(folderPath, fileName);
 
   const overallPct = Math.round((data.correctAnswers / data.totalQuestions) * 100);
@@ -270,7 +273,7 @@ export async function generatePDFReport(data: ReportData): Promise<string> {
 
 // ----- Excel Master Sheet -----
 
-export async function updateMasterSheet(data: ReportData): Promise<string> {
+export async function updateMasterSheet(data: ReportData, pdfFileName?: string): Promise<string> {
   const now = new Date();
   const dateDisplay = now.toLocaleDateString("en-US", { timeZone: "America/Phoenix", year: "numeric", month: "long", day: "numeric" });
   const timeDisplay = now.toLocaleTimeString("en-US", { timeZone: "America/Phoenix", hour: "numeric", minute: "2-digit" });
@@ -285,6 +288,7 @@ export async function updateMasterSheet(data: ReportData): Promise<string> {
   let sheet: ExcelJS.Worksheet;
 
   const columns = [
+    { header: "PDF File", key: "pdfFileName", width: 45 },
     { header: "Name", key: "name", width: 25 },
     { header: "Date", key: "date", width: 22 },
     { header: "Test Version", key: "testVersion", width: 12 },
@@ -309,12 +313,37 @@ export async function updateMasterSheet(data: ReportData): Promise<string> {
     workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(masterPath);
     sheet = workbook.getWorksheet("All Candidates") || workbook.addWorksheet("All Candidates");
-    // CRITICAL: Re-assign column keys after reading — ExcelJS does not persist
-    // key mappings from file. Without this, addRow({...}) produces blank rows.
-    columns.forEach((colDef, i) => {
-      const col = sheet.getColumn(i + 1);
-      col.key = colDef.key;
+    // CRITICAL: Re-assign column keys by matching header text, NOT by position.
+    // This handles migration from old schema (no "PDF File" col) to new schema.
+    // ExcelJS does not persist key mappings from file, so we must re-set them.
+    const existingHeaders: Record<string, number> = {};
+    const hdrRow = sheet.getRow(1);
+    hdrRow.eachCell((cell, colNum) => {
+      existingHeaders[String(cell.value || "").trim()] = colNum;
     });
+
+    // Map known headers to keys
+    for (const colDef of columns) {
+      const colNum = existingHeaders[colDef.header];
+      if (colNum) {
+        sheet.getColumn(colNum).key = colDef.key;
+      }
+    }
+
+    // If "PDF File" column doesn't exist yet, add it at the end
+    if (!existingHeaders["PDF File"]) {
+      const nextCol = Object.keys(existingHeaders).length + 1;
+      sheet.getColumn(nextCol).key = "pdfFileName";
+      sheet.getColumn(nextCol).width = 45;
+      hdrRow.getCell(nextCol).value = "PDF File";
+      hdrRow.getCell(nextCol).font = { bold: true, color: { argb: "FFFFFFFF" }, size: 10 };
+      hdrRow.getCell(nextCol).fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FF136BAC" },
+      };
+      hdrRow.getCell(nextCol).alignment = { vertical: "middle", horizontal: "center" };
+    }
   } else {
     workbook = new ExcelJS.Workbook();
     workbook.creator = "Canyon State Electric";
@@ -352,6 +381,7 @@ export async function updateMasterSheet(data: ReportData): Promise<string> {
 
   // Add new row
   const row = sheet.addRow({
+    pdfFileName: pdfFileName || "",
     name: `${data.lastName}, ${data.firstName}`,
     date: `${dateDisplay} · ${timeDisplay}`,
     testVersion: data.testVersion,
