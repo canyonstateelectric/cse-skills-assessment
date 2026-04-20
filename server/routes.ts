@@ -586,6 +586,37 @@ function buildEmailBody(result: EmailResult): string {
     </tr>`;
   }).join("");
 
+  // Level breakdown rows — group questions by level and count correct/total
+  const levelScoresEmail: Record<string, { correct: number; total: number }> = {};
+  for (const qd of result.questionDetails) {
+    const lev = qd.level || "Unknown";
+    if (!levelScoresEmail[lev]) levelScoresEmail[lev] = { correct: 0, total: 0 };
+    levelScoresEmail[lev].total++;
+    if (qd.isCorrect) levelScoresEmail[lev].correct++;
+  }
+  const levelOrderEmail = ["Wireman 1", "Wireman 2", "Wireman 3", "Wireman 4", "Journeyman", "Leadman", "Foreman", "Superintendent"];
+  const levelRows = Object.entries(levelScoresEmail)
+    .sort((a, b) => {
+      const ai = levelOrderEmail.indexOf(a[0]);
+      const bi = levelOrderEmail.indexOf(b[0]);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    })
+    .map(([level, scores]) => {
+      const pct = Math.round((scores.correct / scores.total) * 100);
+      const barColor = pct >= 70 ? "#00944F" : pct >= 40 ? "#FFCA3A" : "#D94040";
+      const levelName = level.replace(/wireman(\d)/i, "Wireman $1");
+      return `<tr>
+        <td style="padding:8px 12px;color:#c8d6e5;font-size:14px;border-bottom:1px solid #1e3a5f;">${levelName}</td>
+        <td style="padding:8px 12px;color:#fff;font-size:14px;border-bottom:1px solid #1e3a5f;text-align:center;">${scores.correct}/${scores.total}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #1e3a5f;width:120px;">
+          <div style="background:#0d2137;border-radius:4px;height:8px;width:100%;">
+            <div style="background:${barColor};border-radius:4px;height:8px;width:${pct}%;"></div>
+          </div>
+        </td>
+        <td style="padding:8px 12px;color:#fff;font-size:14px;border-bottom:1px solid #1e3a5f;text-align:right;font-weight:600;">${pct}%</td>
+      </tr>`;
+    }).join("");
+
   // Question detail rows
   const questionRows = result.questionDetails.map((qd) => {
     const qLevelLabel = qd.level.replace(/wireman(\d)/i, "Wireman $1").replace(/journeyman/i, "Journeyman").replace(/leadman/i, "Leadman").replace(/foreman/i, "Foreman").replace(/superintendent/i, "Superintendent");
@@ -700,8 +731,22 @@ function buildEmailBody(result: EmailResult): string {
     </table>
   </td></tr>
 
-  <!-- Question Detail -->
+  <!-- Level Breakdown -->
   <tr><td style="background:#0f2d4f;padding:24px 40px;">
+    <div style="color:#FFCA3A;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;margin-bottom:16px;">Performance by Level</div>
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td style="padding:6px 12px;color:#8faabe;font-size:11px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #1e3a5f;">Level</td>
+        <td style="padding:6px 12px;color:#8faabe;font-size:11px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #1e3a5f;text-align:center;">Score</td>
+        <td style="padding:6px 12px;color:#8faabe;font-size:11px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #1e3a5f;">Progress</td>
+        <td style="padding:6px 12px;color:#8faabe;font-size:11px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #1e3a5f;text-align:right;">%</td>
+      </tr>
+      ${levelRows}
+    </table>
+  </td></tr>
+
+  <!-- Question Detail -->
+  <tr><td style="background:#0d2a4a;padding:24px 40px;">
     <div style="color:#FFCA3A;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;margin-bottom:16px;">Question-by-Question Detail</div>
     <table width="100%" cellpadding="0" cellspacing="0">
       ${questionRows}

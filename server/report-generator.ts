@@ -204,6 +204,62 @@ export async function generatePDFReport(data: ReportData): Promise<string> {
 
     y += 10;
 
+    // ----- Level Breakdown -----
+    doc.fontSize(8).font("Helvetica-Bold").fillColor(gold);
+    doc.text("PERFORMANCE BY LEVEL", 50, y);
+    y += 14;
+
+    // Table header
+    doc.fontSize(7).font("Helvetica").fillColor(muted);
+    doc.text("LEVEL", 50, y);
+    doc.text("SCORE", 310, y, { width: 50, align: "center" });
+    doc.text("%", 480, y, { width: 32, align: "right" });
+    y += 4;
+    doc.moveTo(50, y + 8).lineTo(50 + pageW, y + 8).strokeColor("#d0d8e0").lineWidth(0.5).stroke();
+    y += 14;
+
+    // Compute level scores from question details
+    const levelScores: Record<string, { correct: number; total: number }> = {};
+    for (const qd of data.questionDetails) {
+      const lev = qd.level || "Unknown";
+      if (!levelScores[lev]) levelScores[lev] = { correct: 0, total: 0 };
+      levelScores[lev].total++;
+      if (qd.isCorrect) levelScores[lev].correct++;
+    }
+
+    // Sort levels in canonical order
+    const levelOrder = ["Wireman 1", "Wireman 2", "Wireman 3", "Wireman 4", "Journeyman", "Leadman", "Foreman", "Superintendent"];
+    const sortedLevels = Object.entries(levelScores).sort((a, b) => {
+      const ai = levelOrder.indexOf(a[0]);
+      const bi = levelOrder.indexOf(b[0]);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+
+    for (const [level, scores] of sortedLevels) {
+      // Page break check
+      if (y > 720) {
+        doc.addPage();
+        y = 50;
+      }
+      const pct = Math.round((scores.correct / scores.total) * 100);
+      const barColor = pct >= 70 ? green : pct >= 40 ? yellowBar : red;
+
+      doc.fontSize(9).font("Helvetica").fillColor("#2a4a6a");
+      doc.text(formatLevel(level), 50, y);
+      doc.text(`${scores.correct}/${scores.total}`, 310, y, { width: 50, align: "center" });
+
+      // Progress bar
+      doc.rect(380, y + 2, 90, 7).fill("#e0e8f0");
+      doc.rect(380, y + 2, 90 * (pct / 100), 7).fill(barColor);
+
+      doc.fontSize(9).font("Helvetica-Bold").fillColor("#2a4a6a");
+      doc.text(`${pct}%`, 480, y, { width: 32, align: "right" });
+
+      y += 18;
+    }
+
+    y += 10;
+
     // ----- Question-by-Question Detail -----
     doc.fontSize(8).font("Helvetica-Bold").fillColor(gold);
     doc.text("QUESTION-BY-QUESTION DETAIL", 50, y);
