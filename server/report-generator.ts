@@ -35,6 +35,8 @@ interface ReportData {
   language: string;
   timeElapsed: string;
   testVersion: string;
+  lowConfidence?: boolean;
+  submissionNote?: string;
 }
 
 // ----- Formatting helpers -----
@@ -134,17 +136,33 @@ export async function generatePDFReport(data: ReportData): Promise<string> {
     y += 25;
 
     // ----- Diagnosed Level Banner -----
-    const bannerH = data.borderline && data.secondaryLevel ? 70 : 55;
+    const showBorderline = data.borderline && data.secondaryLevel;
+    const showSubmissionNote = !!data.submissionNote;
+    const showLowConfidence = !!data.lowConfidence;
+    const extraLines = (showBorderline ? 1 : 0) + (showSubmissionNote ? 1 : 0) + (showLowConfidence ? 1 : 0);
+    const bannerH = 55 + extraLines * 13;
     doc.rect(50, y, pageW, bannerH).fill(cseBlue);
-    doc.fontSize(7).font("Helvetica").fillColor("rgba(255,255,255,0.7)");
+    doc.fontSize(7).font("Helvetica").fillColor("#d6e6f5");
     doc.text("DIAGNOSED LEVEL", 50, y + 8, { width: pageW, align: "center" });
     doc.fontSize(22).font("Helvetica-Bold").fillColor(white);
     doc.text(levelLabel.toUpperCase(), 50, y + 19, { width: pageW, align: "center" });
-    doc.fontSize(9).font("Helvetica").fillColor("rgba(255,255,255,0.8)");
+    doc.fontSize(9).font("Helvetica").fillColor("#e6f0fa");
     doc.text(`Confidence: ${data.levelConfidence}%`, 50, y + 43, { width: pageW, align: "center" });
-    if (data.borderline && data.secondaryLevel) {
+    let extraY = y + 56;
+    if (showBorderline) {
       doc.fontSize(8).font("Helvetica").fillColor(gold);
-      doc.text(`Borderline — possible range: ${levelLabel} to ${formatLevel(data.secondaryLevel)}`, 50, y + 56, { width: pageW, align: "center" });
+      doc.text(`Borderline — possible range: ${levelLabel} to ${formatLevel(data.secondaryLevel!)}`, 50, extraY, { width: pageW, align: "center" });
+      extraY += 13;
+    }
+    if (showSubmissionNote) {
+      doc.fontSize(8).font("Helvetica-Bold").fillColor(gold);
+      doc.text(data.submissionNote!, 50, extraY, { width: pageW, align: "center" });
+      extraY += 13;
+    }
+    if (showLowConfidence) {
+      doc.fontSize(7).font("Helvetica").fillColor(gold);
+      doc.text("Low Confidence — fewer than 30 questions answered", 50, extraY, { width: pageW, align: "center" });
+      extraY += 13;
     }
     y += bannerH + 15;
 

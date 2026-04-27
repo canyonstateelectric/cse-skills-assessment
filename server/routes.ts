@@ -51,6 +51,7 @@ export function registerRoutes(server: Server, app: Express) {
       res.json({
         sessionId: session.id,
         language: lang,
+        startedAt: session.startedAt ? new Date(session.startedAt).toISOString() : new Date().toISOString(),
         nextQuestion: nextQuestion
           ? sanitizeQuestion(nextQuestion, lang)
           : null,
@@ -103,6 +104,7 @@ export function registerRoutes(server: Server, app: Express) {
 
       res.json({
         language: lang,
+        startedAt: session.startedAt ? new Date(session.startedAt).toISOString() : new Date().toISOString(),
         nextQuestion: nextQuestion ? sanitizeQuestion(nextQuestion, lang) : null,
         progress: {
           questionsAnswered: session.totalQuestions || 0,
@@ -116,11 +118,13 @@ export function registerRoutes(server: Server, app: Express) {
     }
   });
 
-  // Submit an answer and get next question
+  // Submit an answer (or skip) and get next question
+  // Accepts: { questionId, selectedAnswer } OR { questionId, skipped: true }
+  // Skipped questions are treated as incorrect for both grading and CAT.
   app.post("/api/sessions/:id/answer", async (req, res) => {
     try {
       const sessionId = parseInt(req.params.id);
-      const { questionId, selectedAnswer } = req.body;
+      const { questionId, selectedAnswer, skipped } = req.body;
 
       const session = await storage.getSession(sessionId);
       if (!session) {
@@ -135,8 +139,11 @@ export function registerRoutes(server: Server, app: Express) {
         return res.status(404).json({ error: "Question not found" });
       }
 
-      // Check correctness
-      const isCorrect = selectedAnswer === question.correctAnswer;
+      // Skipped questions are graded as incorrect.
+      // Use sentinel value -1 for selectedAnswer so the report can render "Skipped".
+      const isSkip = skipped === true;
+      const effectiveSelected = isSkip ? -1 : (selectedAnswer ?? -1);
+      const isCorrect = !isSkip && effectiveSelected === question.correctAnswer;
 
       // Get all previous responses
       const prevResponses = await storage.getResponsesBySession(sessionId);
@@ -164,7 +171,7 @@ export function registerRoutes(server: Server, app: Express) {
       await storage.addResponse({
         sessionId,
         questionId,
-        selectedAnswer,
+        selectedAnswer: effectiveSelected,
         isCorrect,
         thetaAfter: theta,
         seAfter: se,
@@ -201,13 +208,17 @@ export function registerRoutes(server: Server, app: Express) {
           // Look up what the candidate actually selected from stored responses
           const storedResp = prevResponses.find(r => r.questionId === resp.questionId);
           // For the current (just-answered) question, use the request body values
-          const selAnswer = resp.questionId === questionId ? selectedAnswer : storedResp?.selectedAnswer ?? 0;
+          const selAnswer = resp.questionId === questionId ? effectiveSelected : storedResp?.selectedAnswer ?? -1;
+          // -1 sentinel = skipped
+          const candidateAnswer = selAnswer === -1
+            ? "Skipped"
+            : (q.options[selAnswer] || `Option ${selAnswer}`);
           return {
             number: idx + 1,
             level: q.level,
             domain: q.domain,
             question: q.question,
-            candidateAnswer: q.options[selAnswer] || `Option ${selAnswer}`,
+            candidateAnswer,
             correctAnswer: q.options[q.correctAnswer] || `Option ${q.correctAnswer}`,
             isCorrect: resp.correct,
           };
@@ -308,6 +319,161 @@ export function registerRoutes(server: Server, app: Express) {
           currentTheta: theta,
           estimatedLevel: diagnoseLevel(theta),
           isComplete: false,
+        },
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Submit the test early — used by the 30-min "Turn In Test" button
+  // and the 60-min hard auto-submit.
+  // Generates report regardless of whether minimum questions were reached.
+  // If the candidate answered 0 questions, returns an error.
+  app.post("/api/sessions/:id/submit-early", async (req, res) => {
+    try {
+      const sessionId = parseInt(req.params.id);
+      const { reason } = req.body || {};   // "manual" | "timeout"
+
+      const session = await storage.getSession(sessionId);
+      if (!session) {
+        return res.status(404).json({ error: "Session not found" });
+      }
+      if (session.isComplete) {
+        // Already complete — idempotent: return success so the client can navigate to results
+        return res.json({
+          progress: {
+            questionsAnswered: session.totalQuestions,
+            currentTheta: session.currentTheta,
+            estimatedLevel: session.diagnosedLevel,
+            isComplete: true,
+          },
+        });
+      }
+
+      const prevResponses = await storage.getResponsesBySession(sessionId);
+      const questions = storage.getQuestions();
+
+      if (prevResponses.length === 0) {
+        return res.status(400).json({ error: "No questions have been answered yet." });
+      }
+
+      const theta = session.currentTheta || 0;
+      const se = session.standardError || 3;
+
+      const responses = prevResponses.map((r) => ({
+        questionId: r.questionId,
+        correct: r.isCorrect,
+      }));
+
+      const totalCount = prevResponses.length;
+      const correctCount = prevResponses.filter((r) => r.isCorrect).length;
+
+      const diagnosedLevel = diagnoseLevel(theta);
+      const confidenceDetails = getLevelConfidenceDetails(theta, se);
+      const confidence = confidenceDetails.confidence;
+      const domainScores = getDomainScores(responses, questions);
+
+      // Mark low-confidence flag when the test ended before the minimum question count.
+      // Reuses the existing "borderline" channel so reports show a clear note.
+      const lowConfidence = totalCount < 30;
+      const finalBorderline = confidenceDetails.borderline || lowConfidence;
+
+      await storage.updateSession(sessionId, {
+        currentTheta: theta,
+        standardError: se,
+        totalQuestions: totalCount,
+        correctAnswers: correctCount,
+        diagnosedLevel,
+        isComplete: true,
+        completedAt: new Date(),
+      });
+
+      // Build question-by-question detail from stored responses
+      const questionDetails: QuestionDetail[] = prevResponses.map((resp, idx) => {
+        const q = questions.find((qq) => qq.id === resp.questionId);
+        if (!q) return null;
+        const candidateAnswer =
+          resp.selectedAnswer === -1
+            ? "Skipped"
+            : q.options[resp.selectedAnswer] || `Option ${resp.selectedAnswer}`;
+        return {
+          number: idx + 1,
+          level: q.level,
+          domain: q.domain,
+          question: q.question,
+          candidateAnswer,
+          correctAnswer: q.options[q.correctAnswer] || `Option ${q.correctAnswer}`,
+          isCorrect: resp.isCorrect,
+        };
+      }).filter(Boolean) as QuestionDetail[];
+
+      const startTime = session.startedAt ? new Date(session.startedAt).getTime() : Date.now();
+      const elapsedMs = Date.now() - startTime;
+      const elapsedMin = Math.floor(elapsedMs / 60000);
+      const elapsedSec = Math.floor((elapsedMs % 60000) / 1000);
+      const timeElapsed = elapsedMin > 0 ? `${elapsedMin} min ${elapsedSec} sec` : `${elapsedSec} sec`;
+
+      // Append a short note to indicate this was an early submission
+      const submissionNote =
+        reason === "timeout"
+          ? "Time Limit Reached (60 min auto-submit)"
+          : "Submitted Early by Candidate (30 min)";
+
+      const reportData = {
+        sessionId,
+        firstName: session.firstName,
+        lastName: session.lastName,
+        diagnosedLevel,
+        theta,
+        se,
+        totalQuestions: totalCount,
+        correctAnswers: correctCount,
+        domainScores,
+        levelConfidence: confidence,
+        borderline: finalBorderline,
+        secondaryLevel: confidenceDetails.secondaryLevel,
+        questionDetails,
+        language: session.language || "en",
+        timeElapsed,
+        testVersion: TEST_VERSION,
+        lowConfidence,
+        submissionNote,
+      };
+
+      sendResultsEmail(reportData)
+        .then(async (emailSent) => {
+          if (emailSent) {
+            try {
+              await storage.updateSession(sessionId, { emailSent: true });
+            } catch (e) {
+              console.error("Failed to update emailSent flag:", e);
+            }
+          }
+        })
+        .catch((e) => {
+          console.error("Background email error:", e);
+        });
+
+      generatePDFReport(reportData)
+        .then((pdfPath) => {
+          const pdfFileName = path.basename(pdfPath);
+          updateMasterSheet(reportData, pdfFileName).catch((e) =>
+            console.error("Master sheet update error:", e)
+          );
+        })
+        .catch((e) => console.error("PDF generation error:", e));
+
+      return res.json({
+        progress: {
+          questionsAnswered: totalCount,
+          currentTheta: theta,
+          estimatedLevel: diagnosedLevel,
+          isComplete: true,
+          confidence,
+          domainScores,
+          correctAnswers: correctCount,
+          totalQuestions: totalCount,
         },
       });
     } catch (err: any) {
@@ -690,6 +856,8 @@ function buildEmailBody(result: EmailResult): string {
     <div style="color:#fff;font-size:28px;font-weight:800;text-transform:uppercase;letter-spacing:1px;">${levelLabel}</div>
     <div style="color:rgba(255,255,255,0.8);font-size:13px;margin-top:4px;">Confidence: ${result.levelConfidence}%</div>
     ${result.borderline && result.secondaryLevel ? `<div style="color:#FFCA3A;font-size:12px;margin-top:6px;">Borderline &mdash; possible range: ${levelLabel} to ${result.secondaryLevel.replace(/wireman(\d)/i, 'Wireman $1')}</div>` : ''}
+    ${result.submissionNote ? `<div style="color:#FFCA3A;font-size:12px;margin-top:6px;font-weight:600;">${result.submissionNote}</div>` : ''}
+    ${result.lowConfidence ? `<div style="color:#FFCA3A;font-size:11px;margin-top:4px;">Low Confidence \u2014 fewer than 30 questions answered</div>` : ''}
   </td></tr>
 
   <!-- Summary Stats -->
@@ -793,6 +961,8 @@ interface EmailResult {
   language: string;
   timeElapsed: string;
   testVersion: string;
+  lowConfidence?: boolean;
+  submissionNote?: string;
 }
 
 // Primary: Brevo HTTP API (works on all cloud platforms including Railway)
